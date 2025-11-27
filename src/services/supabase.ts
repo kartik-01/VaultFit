@@ -62,12 +62,20 @@ export const supabaseAuth = {
     const _c = Constants as any;
     const extras = _c.expoConfig?.extra ?? _c.manifest?.extra ?? {};
     const scheme = extras.EXPO_APP_SCHEME ?? 'vaultfit';
-    const redirectTo = extras.EXPO_PUBLIC_SUPABASE_DEEP_LINK ?? `${scheme}://auth/callback`;
+    // On web we want the user to land on the web callback route so the
+    // Supabase client can pick up and persist the session automatically.
+    const webUrl = extras.WEB_URL ?? (typeof window !== 'undefined' ? window.location.origin : undefined);
+    const redirectTo = Platform.OS === 'web' ? `${webUrl ?? ''}/auth-callback` : `${scheme}://auth/callback`;
+
     try {
-      return supabase.auth.signInWithOtp({email} as any);
+      // Use a runtime call to avoid typing mismatches between supabase versions.
+      // Pass `redirectTo` so the magic link opens the correct target.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signInWithOtp({email}, {redirectTo});
     } catch (e) {
-      // Fallback to default behavior
-      return supabase.auth.signInWithOtp({email} as any);
+      // Fallback to default behavior without redirect
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signInWithOtp({email} as any);
     }
   },
   // Note: password-based sign-in removed — app uses magic-link only.
