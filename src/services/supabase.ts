@@ -64,8 +64,18 @@ export const supabaseAuth = {
     const scheme = extras.EXPO_APP_SCHEME ?? 'vaultfit';
     // On web we want the user to land on the web callback route so the
     // Supabase client can pick up and persist the session automatically.
-    const webUrl = extras.WEB_URL ?? (typeof window !== 'undefined' ? window.location.origin : undefined);
+    // Prefer a configured public `WEB_URL` (Netlify) when available so
+    // magic links sent during local development don't point at `localhost`.
+    const runtimeOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
+    let webUrl = extras.WEB_URL ?? runtimeOrigin;
+    // If we're running locally but a public WEB_URL exists in config, prefer it
+    if (runtimeOrigin && runtimeOrigin.includes('localhost') && extras.WEB_URL) {
+      webUrl = extras.WEB_URL;
+    }
     const redirectTo = Platform.OS === 'web' ? `${webUrl ?? ''}/auth-callback` : `${scheme}://auth/callback`;
+    // Helpful runtime debug when testing links
+    // eslint-disable-next-line no-console
+    console.debug('[VaultFit] signInWithEmail redirectTo=', redirectTo, 'runtimeOrigin=', runtimeOrigin, 'extras.WEB_URL=', extras.WEB_URL);
 
     try {
       // Use a runtime call to avoid typing mismatches between supabase versions.
