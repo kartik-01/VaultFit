@@ -37,12 +37,48 @@ jest.mock('expo-constants', () => ({
   },
 }));
 
-jest.mock('expo-file-system', () => ({
-  documentDirectory: '/tmp',
-  makeDirectoryAsync: jest.fn(),
-  writeAsStringAsync: jest.fn(),
-  readAsStringAsync: jest.fn(),
-}));
+jest.mock('expo-file-system', () => {
+  const storage = new Map();
+
+  class FileMock {
+    constructor(...segments) {
+      this.uri = segments
+        .flat()
+        .filter(Boolean)
+        .map(segment => {
+          if (typeof segment === 'string') {
+            return segment;
+          }
+          if (segment && typeof segment === 'object' && 'uri' in segment) {
+            return segment.uri;
+          }
+          return String(segment ?? '');
+        })
+        .join('');
+    }
+
+    get exists() {
+      return storage.has(this.uri);
+    }
+
+    create() {
+      if (!this.exists) {
+        storage.set(this.uri, '');
+      }
+    }
+
+    write(content) {
+      storage.set(this.uri, content);
+    }
+  }
+
+  const Paths = {
+    document: {uri: '/tmp/'},
+    cache: {uri: '/tmp/cache/'},
+  };
+
+  return {File: FileMock, Paths};
+});
 
 jest.mock('expo-font', () => ({
   loadAsync: jest.fn(),

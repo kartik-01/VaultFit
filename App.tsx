@@ -1,143 +1,225 @@
 import {StatusBar} from 'expo-status-bar';
-import {
-  StyleSheet,
-  Text,
-  View,
-  Button,
-  SafeAreaView,
-  ScrollView,
-} from 'react-native';
-import {useEffect, useState} from 'react';
-import {getStorageAdapter} from './src/services/storage/factory';
-import {Activity} from './src/services/storage';
+import * as SecureStore from 'expo-secure-store';
+import {File, Paths} from 'expo-file-system';
+import React, {useCallback, useEffect, useState} from 'react';
+import {ActivityIndicator, StyleSheet, Text} from 'react-native';
+import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
+import HealthCollector, {HealthCollectorPayload} from './modules/health-collector';
 import {KeyManager} from './src/services/crypto/KeyManager';
-import HealthCollector from './modules/health-collector';
+import type {Activity} from './src/services/storage';
+import {getStorageAdapter} from './src/services/storage/factory';
+import DashboardScreen, {SnapshotHistoryItem} from './src/screens/DashboardScreen';
+import SetupVaultScreen from './src/screens/SetupVaultScreen';
 
-export default function App() {
-  const [status, setStatus] = useState('Initializing...');
-  const [activities, setActivities] = useState<Activity[]>([]);
+const ONBOARDING_FLAG = 'vaultfit_onboarded';
+const INSTALL_MARKER = 'vaultfit_install_marker';
+const DEFAULT_ACTIVITY_TYPE = 'health_snapshot';
 
-  const refreshActivities = async () => {
-    const storage = getStorageAdapter();
-    const acts = await storage.getActivities();
-    setActivities(acts);
-  };
+const App: React.FC = () => {
+  const [appReady, setAppReady] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [onboarded, setOnboarded] = useState(false);
+  const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
+  const [snapshot, setSnapshot] = useState<HealthCollectorPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+
+  const parseActivity = useCallback(
+    async (activity: Activity, keyOverride?: string): Promise<SnapshotHistoryItem> => {
+      const keyToUse = keyOverride ?? sessionKey;
+      let rawPayload = activity.data;
+
+      if (keyToUse) {
+        try {
+          rawPayload = await KeyManager.decryptPayload(keyToUse, activity.data);
+        } catch (decryptErr) {
+          console.warn('[VaultFit] Unable to decrypt payload, falling back to raw data', decryptErr);
+        }
+      }
+
+      let payload: HealthCollectorPayload | null = null;
+      try {
+        payload = JSON.parse(rawPayload);
+      } catch (parseErr) {
+        console.warn('[VaultFit] Unable to parse activity payload', parseErr);
+      }
+
+      return {
+        id: activity.id,
+        timestamp: activity.timestamp,
+        type: activity.type,
+        payload,
+      };
+    },
+    [sessionKey],
+  );
+
+  const loadHistory = useCallback(
+    async (keyOverride?: string) => {
+      const storage = getStorageAdapter();
+      const activities = await storage.getActivities();
+      const parsed = await Promise.all(activities.map(activity => parseActivity(activity, keyOverride)));
+      setHistory(parsed);
+      return parsed;
+    },
+    [parseActivity],
+  );
+
+  const persistSnapshot = useCallback(
+    async (payload: HealthCollectorPayload, keyOverride?: string) => {
+      const storage = getStorageAdapter();
+      const recordTime = payload.lastSync ?? Date.now();
+      let serialized = JSON.stringify({...payload, lastSync: recordTime});
+      const keyToUse = keyOverride ?? sessionKey;
+
+      if (keyToUse) {
+        try {
+          serialized = await KeyManager.encryptPayload(keyToUse, serialized);
+        } catch (encryptErr) {
+          console.error('[VaultFit] Encryption error', encryptErr);
+          throw encryptErr;
+        }
+      }
+
+      await storage.saveActivity({
+        id: recordTime.toString(),
+        type: DEFAULT_ACTIVITY_TYPE,
+        data: serialized,
+        timestamp: recordTime,
+      });
+    },
+    [sessionKey],
+  );
 
   useEffect(() => {
-    const init = async () => {
+    const bootstrap = async () => {
       try {
+        const markerFile = new File(Paths.document, INSTALL_MARKER);
+        if (!markerFile.exists) {
+          console.log('[VaultFit] Fresh install detected, resetting onboarding flag');
+          await SecureStore.deleteItemAsync(ONBOARDING_FLAG);
+          markerFile.create({overwrite: true});
+          markerFile.write('installed');
+        }
+
+        const cachedKey = await KeyManager.getSessionKey();
+        if (cachedKey) {
+          setSessionKey(cachedKey);
+        }
+
         const storage = getStorageAdapter();
         await storage.initialize();
-        setStatus('Storage Initialized');
-        refreshActivities();
-      } catch (e) {
-        setStatus(`Error: ${e}`);
+        const parsedHistory = await loadHistory(cachedKey ?? undefined);
+        if (parsedHistory[0]?.payload) {
+          setSnapshot(parsedHistory[0].payload);
+        }
+
+        const flag = await SecureStore.getItemAsync(ONBOARDING_FLAG);
+        setOnboarded(flag === 'true');
+      } catch (err) {
+        console.error('[VaultFit] bootstrap failure', err);
+        setError('Unable to initialize secure storage. Please restart the app.');
+      } finally {
+        setAppReady(true);
       }
     };
-    init();
-  }, []);
 
-  const handleGenerateKey = async () => {
-    const key = await KeyManager.generateMasterKey();
-    console.log('Generated Key (Mock)', key);
-    alert('Master Key Generated (Mock)');
-  };
+    bootstrap();
+  }, [loadHistory]);
 
-  const handleStartWorkout = async () => {
-    await HealthCollector.requestPermissions();
-    await HealthCollector.startTracking('run');
-    setStatus('Tracking started...');
-  };
+  const handleVaultCreated = useCallback(
+    async (derivedSessionKey: string) => {
+      setSessionKey(derivedSessionKey);
+      try {
+        const payload = await HealthCollector.fetchLatestMetrics();
+        if (!payload.lastSync) {
+          payload.lastSync = Date.now();
+        }
 
-  const handleStopWorkout = async () => {
-    const data = await HealthCollector.stopTracking();
-    const storage = getStorageAdapter();
-    await storage.saveActivity({
-      id: Date.now().toString(),
-      type: 'run',
-      data: JSON.stringify(data), // In real app, this would be encrypted
-      timestamp: Date.now(),
-    });
-    setStatus('Workout saved (Encrypted)');
-    refreshActivities();
-  };
+        await persistSnapshot(payload, derivedSessionKey);
+        setSnapshot(payload);
+        await loadHistory(derivedSessionKey);
+
+        await SecureStore.setItemAsync(ONBOARDING_FLAG, 'true');
+        setOnboarded(true);
+      } catch (err) {
+        console.error('[VaultFit] Vault creation error', err);
+        setError('Unable to create secure vault.');
+      }
+    },
+    [loadHistory, persistSnapshot],
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setError(null);
+    setSyncing(true);
+    try {
+      const payload = await HealthCollector.fetchLatestMetrics();
+      if (!payload.lastSync) {
+        payload.lastSync = Date.now();
+      }
+
+      await persistSnapshot(payload);
+      setSnapshot(payload);
+      await loadHistory();
+    } catch (err) {
+      console.error('[VaultFit] Sync error', err);
+      setError('Unable to sync Health data.');
+    } finally {
+      setSyncing(false);
+    }
+  }, [loadHistory, persistSnapshot]);
+
+  if (!appReady) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#38bdf8" />
+          <Text style={styles.loadingText}>Preparing your secure vault…</Text>
+          <StatusBar style="light" />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.content}>
-        <Text style={styles.title}>VaultFit</Text>
-        <Text style={styles.subtitle}>Zero-Knowledge Fitness</Text>
-
-        <View style={styles.statusContainer}>
-          <Text>Status: {status}</Text>
-        </View>
-
-        <View style={styles.buttonGroup}>
-          <Button title="Generate Master Key" onPress={handleGenerateKey} />
-          <Button title="Start Workout" onPress={handleStartWorkout} />
-          <Button title="Stop & Save" onPress={handleStopWorkout} />
-        </View>
-
-        <Text style={styles.sectionTitle}>
-          Recent Activities (Decrypted Local Cache)
-        </Text>
-        {activities.map(act => (
-          <View key={act.id} style={styles.activityItem}>
-            <Text>
-              {act.type} - {new Date(act.timestamp).toLocaleTimeString()}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-      <StatusBar style="auto" />
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        {onboarded ? (
+          <DashboardScreen
+            snapshot={snapshot}
+            history={history}
+            refreshing={syncing}
+            onRefresh={handleRefresh}
+            error={error}
+          />
+        ) : (
+          <SetupVaultScreen onVaultCreated={handleVaultCreated} />
+        )}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
-}
-
-const colors = {
-  white: '#fff',
-  lightGray: '#eee',
-  gray: '#f0f0f0',
-  darkGray: '#666',
 };
 
 const styles = StyleSheet.create({
-  activityItem: {
-    borderBottomColor: colors.lightGray,
-    borderBottomWidth: 1,
-    padding: 15,
-  },
-  buttonGroup: {
-    gap: 10,
-    marginBottom: 30,
-  },
-  container: {
-    backgroundColor: colors.white,
+  loadingContainer: {
+    alignItems: 'center',
+    backgroundColor: '#020617',
     flex: 1,
+    justifyContent: 'center',
+    padding: 24,
   },
-  content: {
+  loadingText: {
+    color: '#cbd5f5',
+    fontSize: 16,
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  safeArea: {
+    backgroundColor: '#020617',
     flex: 1,
-    padding: 20,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  statusContainer: {
-    backgroundColor: colors.gray,
-    borderRadius: 8,
-    marginBottom: 20,
-    padding: 10,
-  },
-  subtitle: {
-    color: colors.darkGray,
-    fontSize: 18,
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginBottom: 8,
   },
 });
+
+export default App;

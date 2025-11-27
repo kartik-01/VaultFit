@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.84.0",
+    "bip39": "^3.1.0",
+    "buffer": "^6.0.3",
     "expo": "~54.0.25",
     "expo-asset": "~12.0.10",
     "expo-build-properties": "~1.0.9",
@@ -20,6 +22,7 @@
     "expo-dev-client": "~6.0.18",
     "expo-file-system": "~19.0.19",
     "expo-font": "~14.0.9",
+    "expo-linear-gradient": "~15.0.7",
     "expo-location": "~19.0.7",
     "expo-secure-store": "~15.0.7",
     "expo-sqlite": "~16.0.9",
@@ -31,12 +34,14 @@
     "react-native-libsodium": "^1.5.0",
     "react-native-maps": "1.20.1",
     "react-native-mmkv": "^4.0.1",
+    "react-native-safe-area-context": "~5.6.0",
     "react-native-url-polyfill": "^3.0.0",
     "react-native-web": "^0.21.0"
   },
   "devDependencies": {
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
+    "@types/bip39": "^2.4.2",
     "@types/react": "~19.1.0",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
     "@typescript-eslint/parser": "^8.48.0",
