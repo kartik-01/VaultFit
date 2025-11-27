@@ -49,23 +49,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           stored locally with SQLCipher so only you can unlock them.
         </Text>
 
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={onConnect}
-          disabled={syncing}
-          style={styles.ctaWrapper}>
-          <LinearGradient
-            colors={["#2dd4bf", "#06b6d4", "#2563eb"]}
-            start={{x: 0, y: 0}}
-            end={{x: 1, y: 1}}
-            style={styles.ctaButton}>
-            {syncing ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.ctaLabel}>Connect Apple Health</Text>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
 
         <View style={styles.featuresRow}>
           {features.map(feature => (
@@ -98,6 +81,24 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             ))}
           </View>
         </View>
+
+                <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={onConnect}
+          disabled={syncing}
+          style={styles.ctaWrapper}>
+          <LinearGradient
+            colors={["#2dd4bf", "#06b6d4", "#2563eb"]}
+            start={{x: 0, y: 0}}
+            end={{x: 1, y: 1}}
+            style={styles.ctaButton}>
+            {syncing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.ctaLabel}>Get Started</Text>
+            )}
+          </LinearGradient>
+        </TouchableOpacity>
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
       </ScrollView>

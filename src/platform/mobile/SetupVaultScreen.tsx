@@ -9,8 +9,8 @@ import {
   TouchableOpacity,
   ScrollView,
 } from 'react-native';
-import HealthCollector from '../../modules/health-collector';
-import {KeyManager} from '../services/crypto/KeyManager';
+import HealthCollector from '../../../modules/health-collector';
+import {KeyManager} from '../../services/crypto/KeyManager';
 
 interface SetupVaultScreenProps {
   onVaultCreated: (sessionKey: string) => void;

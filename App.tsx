@@ -1,15 +1,20 @@
 import {StatusBar} from 'expo-status-bar';
+import 'react-native-url-polyfill/auto';
 import * as SecureStore from 'expo-secure-store';
 import {File, Paths} from 'expo-file-system';
 import React, {useCallback, useEffect, useState} from 'react';
+import {Linking} from 'react-native';
 import {ActivityIndicator, StyleSheet, Text} from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import HealthCollector, {HealthCollectorPayload} from './modules/health-collector';
 import {KeyManager} from './src/services/crypto/KeyManager';
 import type {Activity} from './src/services/storage';
 import {getStorageAdapter} from './src/services/storage/factory';
-import DashboardScreen, {SnapshotHistoryItem} from './src/screens/DashboardScreen';
-import SetupVaultScreen from './src/screens/SetupVaultScreen';
+import DashboardScreen, {SnapshotHistoryItem} from './src/platform/mobile/DashboardScreen';
+import WelcomeScreen from './src/platform/mobile/WelcomeScreen';
+import SetupVaultScreen from './src/platform/mobile/SetupVaultScreen';
+import SignInScreen from './src/platform/mobile/SignInScreen';
+import {supabase, supabaseDb, supabaseAuth} from './src/services/supabase';
 
 const ONBOARDING_FLAG = 'vaultfit_onboarded';
 const INSTALL_MARKER = 'vaultfit_install_marker';
@@ -19,6 +24,8 @@ const App: React.FC = () => {
   const [appReady, setAppReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [onboarded, setOnboarded] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
   const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
   const [snapshot, setSnapshot] = useState<HealthCollectorPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +75,10 @@ const App: React.FC = () => {
   const persistSnapshot = useCallback(
     async (payload: HealthCollectorPayload, keyOverride?: string) => {
       const storage = getStorageAdapter();
+      // Use a replace-in-place strategy for regular health snapshots to
+      // avoid unbounded DB growth. If an existing activity with the
+      // DEFAULT_ACTIVITY_TYPE exists, reuse its id so `INSERT OR REPLACE`
+      // will overwrite the previous row. Otherwise, create a new record.
       const recordTime = payload.lastSync ?? Date.now();
       let serialized = JSON.stringify({...payload, lastSync: recordTime});
       const keyToUse = keyOverride ?? sessionKey;
@@ -81,17 +92,83 @@ const App: React.FC = () => {
         }
       }
 
+      // Check storage for an existing latest snapshot entry and reuse its id
+      // so we update-in-place instead of appending.
+      let idToUse = recordTime.toString();
+      try {
+        const activities = await storage.getActivities();
+        const existing = activities.find(a => a.type === DEFAULT_ACTIVITY_TYPE);
+        if (existing) {
+          idToUse = existing.id;
+        }
+      } catch (err) {
+        // If reading activities fails for any reason, fall back to using a new id
+        console.warn('[VaultFit] Unable to read existing activities, will insert new record', err);
+      }
+
       await storage.saveActivity({
-        id: recordTime.toString(),
+        id: idToUse,
         type: DEFAULT_ACTIVITY_TYPE,
         data: serialized,
         timestamp: recordTime,
       });
+
+      // After local persistence, attempt a non-blocking upload to Supabase
+      // so the server has a matching encrypted copy. Do not fail local
+      // persistence if the remote upload fails.
+      try {
+        const user = await supabaseAuth.getUser();
+        if (user) {
+          await supabaseDb.uploadActivity({
+            id: idToUse,
+            type: DEFAULT_ACTIVITY_TYPE,
+            data: serialized,
+            timestamp: recordTime,
+          });
+        }
+      } catch (err) {
+        console.warn('[VaultFit] Supabase upload failed', err);
+      }
     },
     [sessionKey],
   );
 
   useEffect(() => {
+    // Deep link handler: Supabase magic links may redirect with tokens in the
+    // URL fragment (e.g. vaultfit://auth/callback#access_token=...&refresh_token=...)
+    const handleUrl = async (event: {url: string}) => {
+      try {
+        const {url} = event;
+        if (!url) return;
+        // parse fragment
+        const parsed = new URL(url);
+        const fragment = parsed.hash ? parsed.hash.replace('#', '') : '';
+        const params = new URLSearchParams(fragment);
+        const access_token = params.get('access_token');
+        const refresh_token = params.get('refresh_token');
+        if (access_token) {
+          // Set session directly in Supabase client
+          await supabase.auth.setSession({access_token, refresh_token} as any);
+          setAuthenticated(true);
+        }
+      } catch (err) {
+        console.warn('[VaultFit] deep link handling error', err);
+      }
+    };
+
+    // initial URL (cold start)
+    (async () => {
+      try {
+        const initial = await Linking.getInitialURL();
+        if (initial) {
+          await handleUrl({url: initial});
+        }
+      } catch (err) {
+        console.warn('[VaultFit] error getting initial URL', err);
+      }
+    })();
+
+    const sub = Linking.addEventListener('url', handleUrl as any);
     const bootstrap = async () => {
       try {
         const markerFile = new File(Paths.document, INSTALL_MARKER);
@@ -116,6 +193,15 @@ const App: React.FC = () => {
 
         const flag = await SecureStore.getItemAsync(ONBOARDING_FLAG);
         setOnboarded(flag === 'true');
+
+        // Check Supabase session state
+        try {
+          const user = await supabaseAuth.getUser();
+          setAuthenticated(!!user);
+        } catch (err) {
+          console.warn('[VaultFit] Supabase session check failed', err);
+          setAuthenticated(false);
+        }
       } catch (err) {
         console.error('[VaultFit] bootstrap failure', err);
         setError('Unable to initialize secure storage. Please restart the app.');
@@ -125,6 +211,13 @@ const App: React.FC = () => {
     };
 
     bootstrap();
+    return () => {
+      try {
+        sub.remove();
+      } catch (e) {
+        // ignore
+      }
+    };
   }, [loadHistory]);
 
   const handleVaultCreated = useCallback(
@@ -186,7 +279,20 @@ const App: React.FC = () => {
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style="light" />
-        {onboarded ? (
+        {!onboarded ? (
+          // Onboarding flow: show welcome -> sign-in -> vault setup
+          showWelcome ? (
+            <WelcomeScreen
+              syncing={syncing}
+              onConnect={() => setShowWelcome(false)}
+              error={error}
+            />
+          ) : authenticated ? (
+            <SetupVaultScreen onVaultCreated={handleVaultCreated} />
+          ) : (
+            <SignInScreen onAuthSuccess={() => setAuthenticated(true)} />
+          )
+        ) : (
           <DashboardScreen
             snapshot={snapshot}
             history={history}
@@ -194,8 +300,6 @@ const App: React.FC = () => {
             onRefresh={handleRefresh}
             error={error}
           />
-        ) : (
-          <SetupVaultScreen onVaultCreated={handleVaultCreated} />
         )}
       </SafeAreaView>
     </SafeAreaProvider>

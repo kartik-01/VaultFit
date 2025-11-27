@@ -1,14 +1,18 @@
 import {LinearGradient} from 'expo-linear-gradient';
 import React, {useMemo} from 'react';
+import {Platform} from 'react-native';
 import {
   ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
+  RefreshControl,
   TouchableOpacity,
   View,
+  Alert,
 } from 'react-native';
-import type {HealthCollectorPayload} from '../../modules/health-collector';
+import {getStorageAdapter} from '../../services/storage/factory';
+import type {HealthCollectorPayload} from '../../../modules/health-collector';
 
 export interface SnapshotHistoryItem {
   id: string;
@@ -36,30 +40,39 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const lastSync = snapshot?.lastSync ?? history[0]?.timestamp;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <View style={styles.screenContainer}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.content, styles.contentGrow]}
+        alwaysBounceVertical={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#38bdf8"
+            colors={["#38bdf8"]}
+            progressViewOffset={Platform.OS === 'ios' ? 120 : undefined}
+          />
+        }>
       <LinearGradient
         colors={["#0f172a", "#0b253d", "#052d44"]}
         style={styles.heroCard}>
+        {Platform.OS === 'ios' && refreshing ? (
+          <ActivityIndicator
+            color="#38bdf8"
+            style={styles.headerSpinner}
+            size="small"
+          />
+        ) : null}
         <View style={styles.heroHeader}>
           <View>
             <Text style={styles.heroBadge}>Synced Securely</Text>
-            <Text style={styles.heroTitle}>Private Readiness Dashboard</Text>
+            <Text style={styles.heroTitle}> Readiness Dashboard</Text>
             <Text style={styles.heroCopy}>
               Live vitals, workouts, and recovery factors rendered entirely on
               device.
             </Text>
           </View>
-          <TouchableOpacity
-            style={styles.syncButton}
-            onPress={onRefresh}
-            activeOpacity={0.85}
-            disabled={refreshing}>
-            {refreshing ? (
-              <ActivityIndicator color="#0f172a" />
-            ) : (
-              <Text style={styles.syncLabel}>Refresh</Text>
-            )}
-          </TouchableOpacity>
         </View>
         <Text style={styles.lastSyncLabel}>
           Last sync · {lastSync ? formatRelativeDate(lastSync) : 'pending'}
@@ -76,8 +89,61 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
       <HistoryPanel history={history} />
 
+      {__DEV__ ? (
+        <TouchableOpacity
+          style={styles.debugButton}
+          onPress={async () => {
+            try {
+              const storage = getStorageAdapter();
+              const path = await (storage as any).exportActivitiesToFile();
+              // Try to open the native share sheet so user can save to Files/Downloads
+              try {
+                let SharingModule: any = null;
+                try {
+                  SharingModule = require('expo-sharing');
+                } catch (reqErr) {
+                  // module not available
+                  SharingModule = null;
+                }
+
+                if (SharingModule && typeof SharingModule.isAvailableAsync === 'function') {
+                  const available = await SharingModule.isAvailableAsync();
+                  if (available && typeof SharingModule.shareAsync === 'function') {
+                    await SharingModule.shareAsync(path);
+                  } else {
+                    Alert.alert('Exported', path);
+                  }
+                } else {
+                  // Fallback: use React Native Share with URL if available
+                  try {
+                    const {Share} = require('react-native');
+                    await Share.share({url: path});
+                  } catch (rnShareErr) {
+                    Alert.alert('Exported', path);
+                  }
+                }
+              } catch (shareErr) {
+                console.warn('[Dashboard][DEV] share failed, showing path', shareErr);
+                Alert.alert('Exported', path);
+              }
+            } catch (err: any) {
+              console.error('[Dashboard][DEV] export failed', err);
+              Alert.alert('Export failed', String(err));
+            }
+          }}>
+          <Text style={styles.debugLabel}>Export DB (dev)</Text>
+        </TouchableOpacity>
+      ) : null}
+
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
-    </ScrollView>
+      </ScrollView>
+
+      {refreshing ? (
+        <View pointerEvents="none" style={styles.overlaySpinnerWrap}>
+          <ActivityIndicator size="small" color="#38bdf8" style={styles.overlaySpinner} />
+        </View>
+      ) : null}
+    </View>
   );
 };
 
@@ -260,6 +326,30 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 20,
   },
+  contentGrow: {
+    flexGrow: 1,
+  },
+  headerSpinner: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    zIndex: 999,
+  },
+  screenContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  overlaySpinnerWrap: {
+    position: 'absolute',
+    top: 72,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  overlaySpinner: {
+    transform: [{scale: 1}],
+  },
   errorText: {
     color: '#f87171',
     fontSize: 14,
@@ -423,6 +513,18 @@ const styles = StyleSheet.create({
   vitalsRow: {
     flexDirection: 'row',
     gap: 12,
+  },
+  debugButton: {
+    backgroundColor: 'rgba(56,189,248,0.12)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    alignSelf: 'center',
+    marginTop: 12,
+  },
+  debugLabel: {
+    color: '#38bdf8',
+    fontWeight: '700',
   },
 });
 
