@@ -66,7 +66,23 @@ export const supabaseAuth = {
     // Supabase client can pick up and persist the session automatically.
     // Prefer a configured public `WEB_URL` (Netlify) when available so
     // magic links sent during local development don't point at `localhost`.
-    const runtimeOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
+    // Safely compute the runtime origin. In some embedded runtimes (e.g. dev-client,
+    // certain webviews) `window` may exist but `window.location` can be undefined.
+    // Guard access to avoid throwing when reading `origin`.
+    let runtimeOrigin: string | undefined;
+    try {
+      // Prefer `globalThis.location` when available and safe to read.
+      // Use an explicit check so we don't attempt to read `.origin` of an undefined value.
+      if (typeof globalThis !== 'undefined' && (globalThis as any).location && (globalThis as any).location.origin) {
+        runtimeOrigin = (globalThis as any).location.origin;
+      } else if (typeof window !== 'undefined' && (window as any).location && (window as any).location.origin) {
+        runtimeOrigin = (window as any).location.origin;
+      }
+    } catch (e) {
+      // Defensive: if reading origin throws for any reason, treat as undefined
+      runtimeOrigin = undefined;
+    }
+
     let webUrl = extras.WEB_URL ?? runtimeOrigin;
     // If we're running locally but a public WEB_URL exists in config, prefer it
     if (runtimeOrigin && runtimeOrigin.includes('localhost') && extras.WEB_URL) {
@@ -83,9 +99,18 @@ export const supabaseAuth = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (supabase.auth as any).signInWithOtp({email}, {redirectTo});
     } catch (e) {
-      // Fallback to default behavior without redirect
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (supabase.auth as any).signInWithOtp({email} as any);
+      // Log and rethrow so callers can show a helpful message
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] signInWithEmail error', e);
+      try {
+        // Fallback to default behavior without redirect
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (supabase.auth as any).signInWithOtp({email} as any);
+      } catch (innerErr) {
+        // eslint-disable-next-line no-console
+        console.error('[VaultFit] signInWithEmail fallback failed', innerErr);
+        throw innerErr;
+      }
     }
   },
   // Note: password-based sign-in removed — app uses magic-link only.
