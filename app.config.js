@@ -1,6 +1,4 @@
 const baseConfig = require('./app.json');
-// Load local dotenv for dev flows so `.env.local` values can be injected
-// into `expo.extra` and accessed via `Constants.expoConfig.extra` at runtime.
 require('dotenv').config({ path: '.env.local' });
 
 function withHealthCollectorPlugin(plugins = []) {
@@ -30,20 +28,72 @@ module.exports = () => {
 
   return {
     ...baseConfig,
+
     expo: {
       ...expoConfig,
-      // Ensure env values from .env.local are available at runtime via
-      // `Constants.expoConfig.extra`. This is helpful for local dev and
-      // EAS builds where process.env is not injected at runtime.
+
+      /*******************************
+       * 🔑 Env variables
+       *******************************/
       extra: {
         ...(expoConfig.extra || {}),
+
         EXPO_PUBLIC_SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
         EXPO_PUBLIC_SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
         EXPO_PUBLIC_SUPABASE_KEY: process.env.EXPO_PUBLIC_SUPABASE_KEY,
+
+        WEB_URL: "https://vaultfit.netlify.app",
       },
-      // Add a custom URL scheme so the mobile app can be opened by
-      // magic-link redirects. For dev, we use `vaultfit://`.
-      scheme: process.env.EXPO_APP_SCHEME ?? 'vaultfit',
+
+      /*******************************
+       * 🔗 Deep linking scheme
+       *******************************/
+      scheme: process.env.EXPO_APP_SCHEME ?? "vaultfit", // → vaultfit://
+
+      /*******************************
+       * 🍎 iOS bundle ID (required)
+       *******************************/
+      ios: {
+        ...expoConfig.ios,
+        bundleIdentifier:
+          process.env.EXPO_BUNDLE_ID ?? "com.vaultfit.app",
+
+        supportsTablet: true,
+
+        // Optional: allow universal links later if needed
+        // associatedDomains: ["applinks:vaultfit.netlify.app"],
+      },
+
+      /*******************************
+       * 🤖 Android package ID
+       *******************************/
+      android: {
+        ...expoConfig.android,
+        package: process.env.EXPO_ANDROID_PACKAGE ?? "com.vaultfit.app",
+        intentFilters: [
+          {
+            action: "VIEW",
+            data: [
+              {
+                scheme: "vaultfit",
+              },
+            ],
+            category: ["BROWSABLE", "DEFAULT"],
+          },
+        ],
+      },
+
+      /*******************************
+       * 🌐 Web config (Netlify)
+       *******************************/
+      web: {
+        bundler: "metro",
+        output: "single",
+      },
+
+      /*******************************
+       * 🔌 Plugins
+       *******************************/
       plugins,
     },
   };

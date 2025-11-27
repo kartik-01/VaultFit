@@ -59,29 +59,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           ))}
         </View>
 
-        <View style={styles.previewCard}>
-          <Text style={styles.previewTitle}>Live Preview</Text>
-          <Text style={styles.previewCopy}>
-            Effortless summary cards for steps, heart rate, and energy in a
-            single glance. Tap connect to unlock your first sync.
-          </Text>
-          <View style={styles.previewBars}>
-            {[45, 80, 65, 95, 55, 78, 62].map((heightPct, idx) => (
-              <View key={idx} style={[styles.barTrack, {height: 110}]}> 
-                <View
-                  style={[
-                    styles.barFill,
-                    {
-                      height: (heightPct / 100) * 110,
-                      backgroundColor: gradientByIndex(idx),
-                    },
-                  ]}
-                />
-              </View>
-            ))}
-          </View>
-        </View>
-
                 <TouchableOpacity
           activeOpacity={0.9}
           onPress={onConnect}

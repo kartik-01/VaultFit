@@ -3,7 +3,7 @@ import 'react-native-url-polyfill/auto';
 import * as SecureStore from 'expo-secure-store';
 import {File, Paths} from 'expo-file-system';
 import React, {useCallback, useEffect, useState} from 'react';
-import {Linking} from 'react-native';
+import {Linking, Platform} from 'react-native';
 import {ActivityIndicator, StyleSheet, Text} from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import HealthCollector, {HealthCollectorPayload} from './modules/health-collector';
@@ -15,6 +15,7 @@ import WelcomeScreen from './src/platform/mobile/WelcomeScreen';
 import SetupVaultScreen from './src/platform/mobile/SetupVaultScreen';
 import SignInScreen from './src/platform/mobile/SignInScreen';
 import {supabase, supabaseDb, supabaseAuth} from './src/services/supabase';
+import AuthCallbackWeb from './src/platform/web/AuthCallback';
 
 const ONBOARDING_FLAG = 'vaultfit_onboarded';
 const INSTALL_MARKER = 'vaultfit_install_marker';
@@ -134,6 +135,18 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
+    // If we're running on web and the path is /auth-callback, render the
+    // dedicated web callback screen that reads the fragment and stores session.
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.pathname === '/auth-callback') {
+        // We don't initialize the rest of the app UI in this case; the
+        // top-level render will pick up and render the AuthCallbackWeb.
+        setAppReady(true);
+      }
+    } catch (e) {
+      // ignore
+    }
+
     // Deep link handler: Supabase magic links may redirect with tokens in the
     // URL fragment (e.g. vaultfit://auth/callback#access_token=...&refresh_token=...)
     const handleUrl = async (event: {url: string}) => {
@@ -276,6 +289,10 @@ const App: React.FC = () => {
   }
 
   return (
+    // If web and on /auth-callback, show the callback screen directly
+    (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.pathname === '/auth-callback') ? (
+      <AuthCallbackWeb />
+    ) : (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style="light" />
@@ -303,7 +320,7 @@ const App: React.FC = () => {
         )}
       </SafeAreaView>
     </SafeAreaProvider>
-  );
+  ));
 };
 
 const styles = StyleSheet.create({

@@ -37,12 +37,21 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
+// Select an auth storage adapter depending on platform.
+// - Web: use `localStorage` so session persists in the browser and
+//   `supabase-js` can automatically detect the session from URL fragments
+//   when `detectSessionInUrl` is enabled.
+// - Native: use Expo SecureStore adapter so tokens are kept in secure storage.
+const authStorage: any = typeof window !== 'undefined' && Platform.OS === 'web' ? (globalThis as any).localStorage : ExpoSecureStoreAdapter;
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    storage: Platform.OS === 'web' ? localStorage : ExpoSecureStoreAdapter,
+    storage: authStorage,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: false,
+    // Let web clients detect and persist session from the URL fragment
+    // automatically (this is how Supabase's hosted magic-link flow works).
+    detectSessionInUrl: Platform.OS === 'web',
   },
 });
 
@@ -71,6 +80,20 @@ export const supabaseAuth = {
   async getUser() {
     const {data} = await supabase.auth.getUser();
     return data.user;
+  },
+  async setSessionFromFragment(fragment: string) {
+    // fragment is expected like "#access_token=...&refresh_token=..."
+    const cleaned = fragment?.startsWith('#') ? fragment.slice(1) : fragment;
+    const params = new URLSearchParams(cleaned);
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
+    if (!access_token) {
+      throw new Error('No access_token found in fragment');
+    }
+    // supabase.auth.setSession expects {access_token, refresh_token}
+    // use any to avoid tight typings depending on installed supabase version
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (supabase.auth as any).setSession({access_token, refresh_token} as any);
   },
 };
 
