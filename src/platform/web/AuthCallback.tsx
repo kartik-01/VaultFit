@@ -6,6 +6,7 @@ import {supabaseAuth} from '../../services/supabase';
 const AuthCallbackWeb: React.FC = () => {
   const [status, setStatus] = useState('Processing authentication...');
   const [fragment, setFragment] = useState<string | null>(null);
+  const [autoOpening, setAutoOpening] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -20,7 +21,31 @@ const AuthCallbackWeb: React.FC = () => {
         setStatus('Applying session from callback...');
         // Use helper to set session from fragment (parses access/refresh tokens)
         await supabaseAuth.setSessionFromFragment(hash);
-        setStatus('Verified — session stored. You can close this page or open the app.');
+        setStatus('Verified — session stored. Opening the app...');
+        // Attempt to open the native app automatically. Keep a visible fallback button
+        // in case the browser blocks automatic navigation.
+        setAutoOpening(true);
+        const appLink = `vaultfit://auth/callback${hash}`;
+        // Try a direct navigation first (works on many mobile browsers).
+        try {
+          window.location.href = appLink;
+        } catch (e) {
+          // ignore and try iframe fallback below
+        }
+        // As an additional attempt, create a temporary iframe (some browsers allow this).
+        try {
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = appLink;
+          document.body.appendChild(iframe);
+          setTimeout(() => {
+            try { document.body.removeChild(iframe); } catch (_) {}
+          }, 1500);
+        } catch (e) {
+          // ignore
+        }
+        // After a short wait, stop showing the auto-opening indicator so the button appears.
+        setTimeout(() => setAutoOpening(false), 1500);
       } catch (err) {
         console.warn('[VaultFit] AuthCallback error', err);
         setStatus('Failed to apply session; please try again or copy the fragment to the app.');
@@ -32,7 +57,11 @@ const AuthCallbackWeb: React.FC = () => {
     if (!fragment) return;
     const appLink = `vaultfit://auth/callback${fragment}`;
     // On web, setting window.location will attempt to open the app.
-    window.location.href = appLink;
+    try {
+      window.location.href = appLink;
+    } catch (e) {
+      // ignore
+    }
   };
 
   return (
@@ -44,7 +73,11 @@ const AuthCallbackWeb: React.FC = () => {
           <Text style={styles.label}>Deep link (copy/paste):</Text>
           <Text style={styles.mono}>{`vaultfit://auth/callback${fragment}`}</Text>
           <View style={{marginTop: 12}}>
-            <Button title="Open VaultFit" onPress={openApp} />
+            {autoOpening ? (
+              <Text style={styles.status}>Opening the app…</Text>
+            ) : (
+              <Button title="Open VaultFit" onPress={openApp} />
+            )}
           </View>
         </View>
       ) : null}

@@ -135,17 +135,35 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
-    // If we're running on web and the path is /auth-callback, render the
-    // dedicated web callback screen that reads the fragment and stores session.
-    try {
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.pathname === '/auth-callback') {
-        // We don't initialize the rest of the app UI in this case; the
-        // top-level render will pick up and render the AuthCallbackWeb.
-        setAppReady(true);
+    // If we're running on web, check for an auth fragment on the current
+    // URL (some magic-links land at root `/#access_token=...`). If found,
+    // apply the session so the app becomes authenticated even when the
+    // redirect didn't include the `/auth-callback` path.
+    (async () => {
+      try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const hash = window.location.hash || '';
+          if (hash.includes('access_token')) {
+            try {
+              // Apply session from fragment and remove the hash from URL
+              await supabaseAuth.setSessionFromFragment(hash);
+              // Remove token fragment from the URL for cleanliness
+              try {
+                window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+              } catch (e) {
+                // ignore replaceState errors
+              }
+              setAuthenticated(true);
+              // Continue bootstrapping the app UI below
+            } catch (err) {
+              console.warn('[VaultFit] Failed to apply web auth fragment', err);
+            }
+          }
+        }
+      } catch (e) {
+        // ignore
       }
-    } catch (e) {
-      // ignore
-    }
+    })();
 
     // Deep link handler: Supabase magic links may redirect with tokens in the
     // URL fragment (e.g. vaultfit://auth/callback#access_token=...&refresh_token=...)

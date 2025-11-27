@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {View, Text, StyleSheet, TextInput, TouchableOpacity, Alert} from 'react-native';
 import {supabaseAuth} from '../../services/supabase';
 
@@ -12,34 +12,57 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
   const [loading, setLoading] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
 
+  // Polling refs for auto-detecting session after sending a magic link.
+  const pollingRef = useRef<number | null>(null);
+  const pollingAttemptsRef = useRef(0);
+
+  const clearSessionPolling = () => {
+    if (pollingRef.current != null) {
+      clearInterval(pollingRef.current as any);
+      pollingRef.current = null;
+    }
+    pollingAttemptsRef.current = 0;
+  };
+
+  const startSessionPolling = () => {
+    clearSessionPolling();
+    pollingAttemptsRef.current = 0;
+    pollingRef.current = setInterval(async () => {
+      pollingAttemptsRef.current += 1;
+      try {
+        const user = await supabaseAuth.getUser();
+        if (user) {
+          clearSessionPolling();
+          onAuthSuccess();
+        } else if (pollingAttemptsRef.current > 60) {
+          // stop after ~2 minutes (60 * 2s)
+          clearSessionPolling();
+        }
+      } catch (e) {
+        console.warn('[VaultFit] polling error', e);
+      }
+    }, 2000) as unknown as number;
+  };
+
+  useEffect(() => {
+    return () => {
+      clearSessionPolling();
+    };
+  }, []);
+
   const signInWithEmail = async () => {
     setLoading(true);
     setInfo(null);
     try {
       await supabaseAuth.signInWithEmail(email);
       setInfo(
-        'Magic link sent. Please check your email and follow the link. If you opened the link on this device, return to the app and tap the Continue button. If the link opened in a browser on another device, open the email on this device and tap the link.'
+        'Magic link sent. Please check your email and follow the link. If you opened the link on this device, return to the app — it should sign you in automatically. If the link opened in a browser on another device, open the email on this device and tap the link.'
       );
+      // Start short-lived polling to detect session automatically
+      startSessionPolling();
     } catch (err) {
       console.warn('[VaultFit] signInWithEmail error', err);
       Alert.alert('Sign-in error', 'Unable to send magic link.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const checkSession = async () => {
-    setLoading(true);
-    try {
-      const user = await supabaseAuth.getUser();
-      if (user) {
-        onAuthSuccess();
-      } else {
-        Alert.alert('Not signed in', 'We did not detect an active session yet.');
-      }
-    } catch (err) {
-      console.warn('[VaultFit] checkSession error', err);
-      Alert.alert('Error', 'Unable to check session.');
     } finally {
       setLoading(false);
     }
@@ -66,10 +89,6 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
       </TouchableOpacity>
 
       {info ? <Text style={styles.info}>{info}</Text> : null}
-
-      <TouchableOpacity style={[styles.button, styles.checkButton]} onPress={checkSession} disabled={loading}>
-        <Text style={styles.buttonText}>I clicked the link — Continue</Text>
-      </TouchableOpacity>
     </View>
   );
 };
