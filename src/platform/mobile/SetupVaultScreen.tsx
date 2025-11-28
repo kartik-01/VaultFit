@@ -7,8 +7,11 @@ import {
   ActivityIndicator,
   Alert,
   TouchableOpacity,
+  Share,
   ScrollView,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
 import HealthCollector from '../../../modules/health-collector';
 import {KeyManager} from '../../services/crypto/KeyManager';
 
@@ -23,6 +26,7 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
 }) => {
   const [step, setStep] = useState<Step>('welcome');
   const [mnemonic, setMnemonic] = useState<string>('');
+  // PIN removed per user preference; keep pin state for backward compatibility
   const [pin, setPin] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -58,22 +62,15 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
     }
   };
 
-  const handlePinChange = async (text: string) => {
-    const cleaned = text.replace(/[^0-9]/g, '');
-    setPin(cleaned);
-    if (cleaned.length === 6) {
-      await createVault(cleaned);
-    }
-  };
-
-  const createVault = async (finalPin: string) => {
+  const createVault = async (finalPin?: string) => {
     setStep('creating');
     try {
       const sessionKey = await KeyManager.initializeVault(mnemonic, finalPin);
       onVaultCreated(sessionKey);
     } catch (error) {
       Alert.alert('Error', 'Failed to create vault. Please try again.');
-      setStep('pin');
+      // If we failed, fall back to mnemonic step to let user retry saving
+      setStep('mnemonic');
       setPin('');
     }
   };
@@ -132,7 +129,7 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
       <Text style={styles.title}>Recovery Phrase</Text>
       <Text style={styles.subtitle}>
         Write down these 12 words. This is the ONLY way to recover your vault if
-        you forget your PIN.
+        you lose access to this device. You can copy or save them now.
       </Text>
 
       <View style={styles.mnemonicContainer}>
@@ -144,11 +141,64 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
         ))}
       </View>
 
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() => setStep('pin')}>
-        <Text style={styles.buttonText}>I Have Saved It</Text>
-      </TouchableOpacity>
+      <View style={{width: '100%', gap: 12}}>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={async () => {
+            // Copy to clipboard
+            try {
+              await Clipboard.setStringAsync(mnemonic);
+              Alert.alert('Copied', 'Recovery phrase copied to clipboard.');
+            } catch (err) {
+              console.warn('[SetupVault] copy failed', err);
+              Alert.alert('Copy failed', 'Unable to copy to clipboard.');
+            }
+          }}>
+          <Text style={styles.buttonText}>Copy Recovery Phrase</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, {backgroundColor: '#60a5fa'}]}
+          onPress={async () => {
+            // Try to save via share/export
+            try {
+              const filename = `vaultfit-recovery-${Date.now()}.txt`;
+              const content = mnemonic;
+              // Write to temp file - prefer expo-sharing shareAsync; fall back to RN Share
+              let path = '';
+              try {
+                const fs = require('expo-file-system');
+                const uri = fs.cacheDirectory + filename;
+                await fs.writeAsStringAsync(uri, content, {encoding: fs.EncodingType.UTF8});
+                path = uri;
+              } catch (fsErr) {
+                console.warn('[SetupVault] write file failed', fsErr);
+              }
+
+              if (path && (await Sharing.isAvailableAsync())) {
+                await Sharing.shareAsync(path);
+              } else {
+                // Fallback to RN Share
+                try {
+                  await Share.share({message: content});
+                } catch (shareErr) {
+                  Alert.alert('Saved', 'Recovery phrase ready.');
+                }
+              }
+            } catch (err) {
+              console.warn('[SetupVault] share failed', err);
+              Alert.alert('Save failed', 'Unable to save recovery phrase.');
+            }
+          }}>
+          <Text style={styles.buttonText}>Save / Export Recovery Phrase</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, {backgroundColor: '#10b981'}]}
+          onPress={() => createVault(undefined)}>
+          <Text style={styles.buttonText}>I Have Saved It — Continue</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 

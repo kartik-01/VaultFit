@@ -27,43 +27,54 @@ export class KeyManager {
   /**
    * Encrypts the Master Key with the PIN, stores it, and returns a session key.
    */
-  static async initializeVault(mnemonic: string, pin: string): Promise<string> {
+  static async initializeVault(mnemonic: string, pin?: string): Promise<string> {
     try {
       const masterKey = await KeyManager.mnemonicToMasterKey(mnemonic);
-      const salt = await Sodium.randombytes_buf(16);
-      const keyHash = await Sodium.crypto_pwhash(
-        32,
-        pin,
-        salt,
-        Sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
-        Sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
-        Sodium.crypto_pwhash_ALG_ARGON2ID13,
-      );
-      const nonce = await Sodium.randombytes_buf(
-        Sodium.crypto_secretbox_NONCEBYTES,
-      );
-      const encryptedMasterKey = await Sodium.crypto_secretbox_easy(
-        masterKey,
-        nonce,
-        keyHash,
-      );
-      const combinedEncryptedData = new Uint8Array(
-        nonce.length + encryptedMasterKey.length,
-      );
-      combinedEncryptedData.set(nonce);
-      combinedEncryptedData.set(encryptedMasterKey, nonce.length);
+      // If a PIN is provided, encrypt the master key with a PIN-derived Argon2 key.
+      if (pin && pin.length > 0) {
+        const salt = await Sodium.randombytes_buf(16);
+        const keyHash = await Sodium.crypto_pwhash(
+          32,
+          pin,
+          salt,
+          Sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+          Sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+          Sodium.crypto_pwhash_ALG_ARGON2ID13,
+        );
+        const nonce = await Sodium.randombytes_buf(
+          Sodium.crypto_secretbox_NONCEBYTES,
+        );
+        const encryptedMasterKey = await Sodium.crypto_secretbox_easy(
+          masterKey,
+          nonce,
+          keyHash,
+        );
+        const combinedEncryptedData = new Uint8Array(
+          nonce.length + encryptedMasterKey.length,
+        );
+        combinedEncryptedData.set(nonce);
+        combinedEncryptedData.set(encryptedMasterKey, nonce.length);
 
-      await SecureStore.setItemAsync(
-        SALT_STORAGE_KEY,
-        Buffer.from(salt).toString('base64'),
-      );
-      await SecureStore.setItemAsync(
-        MASTER_KEY_STORAGE_KEY,
-        Buffer.from(combinedEncryptedData).toString('base64'),
-      );
+        await SecureStore.setItemAsync(
+          SALT_STORAGE_KEY,
+          Buffer.from(salt).toString('base64'),
+        );
+        await SecureStore.setItemAsync(
+          MASTER_KEY_STORAGE_KEY,
+          Buffer.from(combinedEncryptedData).toString('base64'),
+        );
+      } else {
+        // No PIN chosen: store the master key directly in secure storage
+        // (rely on device keychain/secure storage protections). This makes
+        // onboarding friction-free per user's preference.
+        await SecureStore.setItemAsync(
+          MASTER_KEY_STORAGE_KEY,
+          Buffer.from(masterKey).toString('base64'),
+        );
+      }
 
       const sessionKeyB64 = await KeyManager.cacheSessionKey(masterKey);
-      console.log('[KeyManager] Vault initialized securely.');
+      console.log('[KeyManager] Vault initialized.');
       return sessionKeyB64;
     } catch (error) {
       console.error('[KeyManager] Error initializing vault:', error);
@@ -77,35 +88,39 @@ export class KeyManager {
   static async getMasterKey(pin: string): Promise<Uint8Array> {
     try {
       const saltB64 = await SecureStore.getItemAsync(SALT_STORAGE_KEY);
-      const encryptedDataB64 = await SecureStore.getItemAsync(
-        MASTER_KEY_STORAGE_KEY,
-      );
+      const storedB64 = await SecureStore.getItemAsync(MASTER_KEY_STORAGE_KEY);
 
-      if (!saltB64 || !encryptedDataB64) {
+      if (!storedB64) {
         throw new Error('Vault not initialized');
       }
 
-      const salt = new Uint8Array(Buffer.from(saltB64, 'base64'));
-      const encryptedData = new Uint8Array(
-        Buffer.from(encryptedDataB64, 'base64'),
-      );
-      const nonce = encryptedData.slice(0, Sodium.crypto_secretbox_NONCEBYTES);
-      const ciphertext = encryptedData.slice(Sodium.crypto_secretbox_NONCEBYTES);
-      const keyHash = await Sodium.crypto_pwhash(
-        32,
-        pin,
-        salt,
-        Sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
-        Sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
-        Sodium.crypto_pwhash_ALG_ARGON2ID13,
-      );
-      const masterKey = await Sodium.crypto_secretbox_open_easy(
-        ciphertext,
-        nonce,
-        keyHash,
-      );
-      await KeyManager.cacheSessionKey(masterKey);
-      return masterKey;
+      // If a salt exists, assume the master key is encrypted with a PIN-derived key.
+      if (saltB64) {
+        const encryptedData = new Uint8Array(Buffer.from(storedB64, 'base64'));
+        const salt = new Uint8Array(Buffer.from(saltB64, 'base64'));
+        const nonce = encryptedData.slice(0, Sodium.crypto_secretbox_NONCEBYTES);
+        const ciphertext = encryptedData.slice(Sodium.crypto_secretbox_NONCEBYTES);
+        const keyHash = await Sodium.crypto_pwhash(
+          32,
+          pin,
+          salt,
+          Sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+          Sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+          Sodium.crypto_pwhash_ALG_ARGON2ID13,
+        );
+        const masterKey = await Sodium.crypto_secretbox_open_easy(
+          ciphertext,
+          nonce,
+          keyHash,
+        );
+        await KeyManager.cacheSessionKey(masterKey);
+        return masterKey;
+      }
+
+      // No salt found: stored value is plain base64(masterKey)
+      const masterKeyPlain = new Uint8Array(Buffer.from(storedB64, 'base64'));
+      await KeyManager.cacheSessionKey(masterKeyPlain);
+      return masterKeyPlain;
     } catch (error) {
       console.error('[KeyManager] Error decrypting master key:', error);
       throw new Error('Invalid PIN or corrupted vault');
