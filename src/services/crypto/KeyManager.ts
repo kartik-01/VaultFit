@@ -83,9 +83,11 @@ export class KeyManager {
   }
 
   /**
-   * Retrieves and decrypts the Master Key using the PIN.
+   * Retrieves and decrypts the Master Key.
+   * If the vault was initialized with a PIN, pass it as `pin` to decrypt.
+   * If the vault was initialized without a PIN, this will return the stored master key.
    */
-  static async getMasterKey(pin: string): Promise<Uint8Array> {
+  static async getMasterKey(pin?: string): Promise<Uint8Array> {
     try {
       const saltB64 = await SecureStore.getItemAsync(SALT_STORAGE_KEY);
       const storedB64 = await SecureStore.getItemAsync(MASTER_KEY_STORAGE_KEY);

@@ -19,15 +19,14 @@ interface SetupVaultScreenProps {
   onVaultCreated: (sessionKey: string) => void;
 }
 
-type Step = 'welcome' | 'permissions' | 'mnemonic' | 'pin' | 'creating';
+type Step = 'welcome' | 'permissions' | 'mnemonic' | 'creating';
 
 const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
   onVaultCreated,
 }) => {
   const [step, setStep] = useState<Step>('welcome');
   const [mnemonic, setMnemonic] = useState<string>('');
-  // PIN removed per user preference; keep pin state for backward compatibility
-  const [pin, setPin] = useState('');
+  // PIN removed per user preference; onboarding no longer collects a PIN
   const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
@@ -202,29 +201,6 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
     </View>
   );
 
-  const renderPinStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={styles.icon}>🛡️</Text>
-      <Text style={styles.title}>Create PIN</Text>
-      <Text style={styles.subtitle}>
-        Set a 6-digit PIN to secure your vault.
-      </Text>
-
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          value={pin}
-          onChangeText={handlePinChange}
-          keyboardType="number-pad"
-          maxLength={6}
-          secureTextEntry
-          placeholder="••••••"
-          placeholderTextColor="#64748b"
-          autoFocus
-        />
-      </View>
-    </View>
-  );
 
   const renderCreatingStep = () => (
     <View style={styles.stepContainer}>
@@ -242,7 +218,7 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
         {step === 'welcome' && renderWelcomeStep()}
         {step === 'permissions' && renderPermissionsStep()}
         {step === 'mnemonic' && renderMnemonicStep()}
-        {step === 'pin' && renderPinStep()}
+        {/* PIN step removed; onboarding proceeds from mnemonic -> creating */}
         {step === 'creating' && renderCreatingStep()}
       </ScrollView>
     </View>
