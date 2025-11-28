@@ -63,6 +63,10 @@ export const supabaseAuth = {
     const _c = Constants as any;
     const extras = _c.expoConfig?.extra ?? _c.manifest?.extra ?? {};
     const scheme = extras.EXPO_APP_SCHEME ?? 'vaultfit';
+    // On web we want the user to land on the web callback route so the
+    // Supabase client can pick up and persist the session automatically.
+    // Prefer a configured public `WEB_URL` (Netlify) when available so
+    // magic links sent during local development don't point at `localhost`.
     // Safely compute the runtime origin. In some embedded runtimes (e.g. dev-client,
     // certain webviews) `window` may exist but `window.location` can be undefined.
     // Guard access to avoid throwing when reading `origin`.
@@ -247,8 +251,7 @@ export const supabaseDb = {
     // use upsert to replace existing row with same id
     const {error} = await supabase.from('remote_activities').upsert(payload);
     if (error) throw error;
-    // eslint-disable-next-line no-console
-    console.log('[VaultFit] local data sync with cloud completed', {id: activity.id});
+    console.log('[VaultFit] Uploaded activity to Supabase', activity.id);
     return true;
   },
   // Upload all locally stored activities to Supabase. This will iterate

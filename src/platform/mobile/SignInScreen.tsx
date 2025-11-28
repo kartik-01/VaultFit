@@ -1,4 +1,4 @@
-import React, {useState, useRef, useEffect} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {View, Text, StyleSheet, TextInput, TouchableOpacity, Alert} from 'react-native';
 import {supabaseAuth} from '../../services/supabase';
 
@@ -63,23 +63,6 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
     } catch (err) {
       console.warn('[VaultFit] sendOtp failed', err);
       Alert.alert('Error', 'Unable to send OTP.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const checkSession = async () => {
-    setLoading(true);
-    try {
-      const user = await supabaseAuth.getUser();
-      if (user) {
-        onAuthSuccess();
-      } else {
-        setInfo('No session found yet — try opening the link you received.');
-      }
-    } catch (err) {
-      console.warn('[VaultFit] checkSession failed', err);
-      setInfo('Unable to check session.');
     } finally {
       setLoading(false);
     }
@@ -157,10 +140,6 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
       )}
 
       {info ? <Text style={styles.info}>{info}</Text> : null}
-
-      <TouchableOpacity style={[styles.button, styles.checkButton]} onPress={checkSession} disabled={loading}>
-        <Text style={styles.buttonText}>I clicked the link — Continue</Text>
-      </TouchableOpacity>
     </View>
   );
 };
