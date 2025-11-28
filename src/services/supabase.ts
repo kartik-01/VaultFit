@@ -3,6 +3,7 @@ import {Platform} from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import 'react-native-url-polyfill/auto';
 import Constants from 'expo-constants';
+import {getStorageAdapter} from './storage/factory';
 
 // Read Supabase config from environment. Do NOT embed service_role keys
 // in client code. Use the public/anon key for client-side usage.
@@ -62,12 +63,137 @@ export const supabaseAuth = {
     const _c = Constants as any;
     const extras = _c.expoConfig?.extra ?? _c.manifest?.extra ?? {};
     const scheme = extras.EXPO_APP_SCHEME ?? 'vaultfit';
-    const redirectTo = extras.EXPO_PUBLIC_SUPABASE_DEEP_LINK ?? `${scheme}://auth/callback`;
+    // Safely compute the runtime origin. In some embedded runtimes (e.g. dev-client,
+    // certain webviews) `window` may exist but `window.location` can be undefined.
+    // Guard access to avoid throwing when reading `origin`.
+    let runtimeOrigin: string | undefined;
     try {
-      return supabase.auth.signInWithOtp({email} as any);
+      // Prefer `globalThis.location` when available and safe to read.
+      // Use an explicit check so we don't attempt to read `.origin` of an undefined value.
+      if (typeof globalThis !== 'undefined' && (globalThis as any).location && (globalThis as any).location.origin) {
+        runtimeOrigin = (globalThis as any).location.origin;
+      } else if (typeof window !== 'undefined' && (window as any).location && (window as any).location.origin) {
+        runtimeOrigin = (window as any).location.origin;
+      }
     } catch (e) {
-      // Fallback to default behavior
-      return supabase.auth.signInWithOtp({email} as any);
+      // Defensive: if reading origin throws for any reason, treat as undefined
+      runtimeOrigin = undefined;
+    }
+
+    let webUrl = extras.WEB_URL ?? runtimeOrigin;
+    // If a public WEB_URL is provided in app config, prefer it and always
+    // generate magic links that land on the hosted callback. This ensures
+    // the link works cross-device: it will land on the hosted page which
+    // will persist the session and then attempt to open the native app.
+    // Fall back to runtime origin when WEB_URL is not configured.
+    if (extras.WEB_URL) {
+      webUrl = extras.WEB_URL;
+    } else if (runtimeOrigin && runtimeOrigin.includes('localhost') && extras.WEB_URL) {
+      webUrl = extras.WEB_URL;
+    }
+
+    // For cross-platform behavior prefer the hosted callback when available.
+    let redirectTo: string;
+    if (webUrl) {
+      redirectTo = `${webUrl.replace(/\/$/, '')}/auth-callback`;
+    } else {
+      // No public web URL configured; preserve previous behavior.
+      redirectTo = Platform.OS === 'web' ? `${runtimeOrigin ?? ''}/auth-callback` : `${scheme}://auth/callback`;
+    }
+
+    // Helpful runtime debug when testing links
+    // eslint-disable-next-line no-console
+    console.debug('[VaultFit] signInWithEmail chosen redirectTo=', redirectTo, 'runtimeOrigin=', runtimeOrigin, 'extras.WEB_URL=', extras.WEB_URL);
+
+    try {
+      // Use a runtime call to avoid typing mismatches between supabase versions.
+      // Pass `redirectTo` so the magic link opens the correct target.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signInWithOtp({email}, {redirectTo});
+    } catch (e) {
+      // Log and rethrow so callers can show a helpful message
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] signInWithEmail error', e);
+      try {
+        // Fallback to default behavior without redirect
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (supabase.auth as any).signInWithOtp({email} as any);
+      } catch (innerErr) {
+        // eslint-disable-next-line no-console
+        console.error('[VaultFit] signInWithEmail fallback failed', innerErr);
+        throw innerErr;
+      }
+    }
+  },
+  // New: Email + Password sign-in helper (synchronous flow for apps that prefer
+  // credential-based auth instead of magic links). Returns the Supabase
+  // response object so callers can inspect errors and session state.
+  async signInWithEmailAndPassword(email: string, password: string) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // Use signInWithPassword where available on newer supabase clients.
+      if ((supabase.auth as any).signInWithPassword) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (supabase.auth as any).signInWithPassword({email, password} as any);
+      }
+      // Fallback for older clients
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signIn({email, password} as any);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] signInWithEmailAndPassword error', err);
+      throw err;
+    }
+  },
+  // Create a new user with email + password. Returns Supabase response object.
+  async signUpWithEmailAndPassword(email: string, password: string) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((supabase.auth as any).signUp) {
+        // Newer clients expose signUp; pass the credentials directly.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (supabase.auth as any).signUp({email, password} as any);
+      }
+      // Fallback: try the generic signUp call
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signUp({email, password} as any);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] signUpWithEmailAndPassword error', err);
+      throw err;
+    }
+  },
+  // Send an email OTP (6-digit token) to the given address. Supabase will
+  // send an OTP when the email template uses {{ .Token }}. `shouldCreateUser`
+  // controls whether calling this on an unknown user will auto-create them.
+  async sendEmailOtp(email: string, shouldCreateUser = true) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signInWithOtp({email}, {options: {shouldCreateUser}} as any);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] sendEmailOtp error', err);
+      throw err;
+    }
+  },
+
+  // Verify an email OTP. Token is the 6-digit code the user received.
+  async verifyEmailOtp(email: string, token: string) {
+    try {
+      // Depending on supabase client version this may be `verifyOtp` or
+      // part of `auth.verifyOtp`.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((supabase.auth as any).verifyOtp) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (supabase.auth as any).verifyOtp({email, token, type: 'email'} as any);
+      }
+      // Fallback: if method not present try `signInWithOtp` with token
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (supabase.auth as any).signInWithOtp({email, token} as any);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[VaultFit] verifyEmailOtp error', err);
+      throw err;
     }
   },
   // Note: password-based sign-in removed — app uses magic-link only.
@@ -112,12 +238,34 @@ export const supabaseDb = {
       user_id: userId,
       type: activity.type,
       data: activity.data,
-      timestamp: activity.timestamp,
+      // Ensure timestamp is an integer (bigint in Postgres). Some sources
+      // may provide fractional milliseconds — coerce to integer to avoid
+      // "invalid input syntax for type bigint" errors.
+      timestamp: Math.floor(activity.timestamp as number),
     };
 
     // use upsert to replace existing row with same id
     const {error} = await supabase.from('remote_activities').upsert(payload);
     if (error) throw error;
+    // eslint-disable-next-line no-console
+    console.log('[VaultFit] local data sync with cloud completed', {id: activity.id});
+    return true;
+  },
+  // Upload all locally stored activities to Supabase. This will iterate
+  // over the storage adapter's activities and call upsert for each row.
+  async syncLocalActivities() {
+    const storage = getStorageAdapter();
+    await storage.initialize();
+    const activities = await storage.getActivities();
+    for (const a of activities) {
+      try {
+        await (supabaseDb as any).uploadActivity({id: a.id, type: a.type, data: a.data, timestamp: a.timestamp});
+      } catch (err) {
+        // Log and continue with next activity — do not fail the whole sync.
+        // eslint-disable-next-line no-console
+        console.warn('[VaultFit] syncLocalActivities upload failed for', a.id, err);
+      }
+    }
     return true;
   },
 };

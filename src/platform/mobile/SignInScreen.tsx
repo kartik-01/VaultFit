@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useRef, useEffect} from 'react';
 import {View, Text, StyleSheet, TextInput, TouchableOpacity, Alert} from 'react-native';
 import {supabaseAuth} from '../../services/supabase';
 
@@ -8,21 +8,61 @@ interface Props {
 
 const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
   const [email, setEmail] = useState('');
-  const [devPassword, setDevPassword] = useState('');
+  const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
+  const [step, setStep] = useState<'enterEmail' | 'enterCode'>('enterEmail');
+  const [resendSecs, setResendSecs] = useState(0);
+  const resendTimerRef = useRef<number | null>(null);
 
-  const signInWithEmail = async () => {
+  useEffect(() => {
+    return () => {
+      if (resendTimerRef.current) {
+        clearInterval(resendTimerRef.current as any);
+        resendTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const startResendTimer = (secs = 30) => {
+    setResendSecs(secs);
+    if (resendTimerRef.current) {
+      clearInterval(resendTimerRef.current as any);
+    }
+    resendTimerRef.current = setInterval(() => {
+      setResendSecs(s => {
+        if (s <= 1) {
+          if (resendTimerRef.current) {
+            clearInterval(resendTimerRef.current as any);
+            resendTimerRef.current = null;
+          }
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000) as unknown as number;
+  };
+
+  const sendOtp = async () => {
+    if (!email) return Alert.alert('Email required', 'Please enter your email address');
     setLoading(true);
     setInfo(null);
     try {
-      await supabaseAuth.signInWithEmail(email);
-      setInfo(
-        'Magic link sent. Please check your email and follow the link. If you opened the link on this device, return to the app and tap the Continue button. If the link opened in a browser on another device, open the email on this device and tap the link.'
-      );
+      const resp = await supabaseAuth.sendEmailOtp(email, true);
+      // Log the full response for debugging template/delivery issues
+      // eslint-disable-next-line no-console
+      console.debug('[VaultFit] sendOtp response', resp);
+      if (resp?.error) {
+        console.warn('[VaultFit] sendOtp error', resp.error);
+        Alert.alert('Error sending code', resp.error.message || 'Unable to send code');
+      } else {
+        setStep('enterCode');
+        setInfo('Code sent — check your email (it may take a minute).');
+        startResendTimer(30);
+      }
     } catch (err) {
-      console.warn('[VaultFit] signInWithEmail error', err);
-      Alert.alert('Sign-in error', 'Unable to send magic link.');
+      console.warn('[VaultFit] sendOtp failed', err);
+      Alert.alert('Error', 'Unable to send OTP.');
     } finally {
       setLoading(false);
     }
@@ -35,35 +75,86 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
       if (user) {
         onAuthSuccess();
       } else {
-        Alert.alert('Not signed in', 'We did not detect an active session yet.');
+        setInfo('No session found yet — try opening the link you received.');
       }
     } catch (err) {
-      console.warn('[VaultFit] checkSession error', err);
-      Alert.alert('Error', 'Unable to check session.');
+      console.warn('[VaultFit] checkSession failed', err);
+      setInfo('Unable to check session.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Dev password sign-in removed — app uses magic links only.
+  const verifyOtp = async () => {
+    if (code.length < 4) return Alert.alert('Enter code', 'Please enter the 6-digit code');
+    setLoading(true);
+    try {
+      const resp = await supabaseAuth.verifyEmailOtp(email, code);
+      if (resp?.error) {
+        console.warn('[VaultFit] verifyOtp error', resp.error);
+        Alert.alert('Invalid code', resp.error.message || 'Unable to verify code');
+      } else {
+        // Success — Supabase has set the session in storage
+        onAuthSuccess();
+      }
+    } catch (err) {
+      console.warn('[VaultFit] verifyOtp failed', err);
+      Alert.alert('Error', 'Unable to verify code.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Create or sign in to your VaultFit account</Text>
+      <Text style={styles.title}>Sign in to VaultFit</Text>
 
-      <Text style={styles.label}>Email (magic link)</Text>
-      <TextInput
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        placeholder="you@example.com"
-        placeholderTextColor="#64748b"
-        autoCapitalize="none"
-      />
-      <TouchableOpacity style={styles.button} onPress={signInWithEmail} disabled={loading || !email}>
-        <Text style={styles.buttonText}>{loading ? 'Sending…' : 'Send Magic Link'}</Text>
-      </TouchableOpacity>
+      {step === 'enterEmail' ? (
+        <>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            placeholder="you@example.com"
+            placeholderTextColor="#64748b"
+            autoCapitalize="none"
+          />
+          <TouchableOpacity style={styles.button} onPress={sendOtp} disabled={loading || !email}>
+            <Text style={styles.buttonText}>{loading ? 'Sending…' : 'Send code'}</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <>
+          <Text style={styles.label}>Enter the code we sent to</Text>
+          <Text style={{color: '#cbd5f5', marginBottom: 8}}>{email}</Text>
+          <TextInput
+            style={styles.input}
+            value={code}
+            onChangeText={setCode}
+            keyboardType="number-pad"
+            placeholder="123456"
+            placeholderTextColor="#64748b"
+            maxLength={6}
+          />
+          <TouchableOpacity style={styles.button} onPress={verifyOtp} disabled={loading || !code}>
+            <Text style={styles.buttonText}>{loading ? 'Verifying…' : 'Verify code'}</Text>
+          </TouchableOpacity>
+
+          <View style={{flexDirection: 'row', justifyContent: 'center', marginTop: 12}}>
+            <TouchableOpacity onPress={() => { setStep('enterEmail'); setCode(''); }}>
+              <Text style={{color: '#94a3b8'}}>Change email</Text>
+            </TouchableOpacity>
+            <View style={{width: 18}} />
+            <TouchableOpacity onPress={sendOtp} disabled={resendSecs > 0}>
+              <Text style={{color: resendSecs > 0 ? '#475569' : '#94a3b8'}}>
+                {resendSecs > 0 ? `Resend in ${resendSecs}s` : 'Resend code'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
 
       {info ? <Text style={styles.info}>{info}</Text> : null}
 

@@ -268,6 +268,12 @@ const App: React.FC = () => {
       await persistSnapshot(payload);
       setSnapshot(payload);
       await loadHistory();
+      // After local persistence, attempt to sync all local activities to Supabase
+      try {
+        await supabaseDb.syncLocalActivities();
+      } catch (err) {
+        console.warn('[VaultFit] syncLocalActivities failed', err);
+      }
     } catch (err) {
       console.error('[VaultFit] Sync error', err);
       setError('Unable to sync Health data.');
