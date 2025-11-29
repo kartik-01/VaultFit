@@ -68,22 +68,7 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
     }
   };
 
-  const checkSession = async () => {
-    setLoading(true);
-    try {
-      const user = await supabaseAuth.getUser();
-      if (user) {
-        onAuthSuccess();
-      } else {
-        setInfo('No session found yet — try opening the link you received.');
-      }
-    } catch (err) {
-      console.warn('[VaultFit] checkSession failed', err);
-      setInfo('Unable to check session.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Legacy manual session check removed — OTP flow handles verification now
 
   const verifyOtp = async () => {
     if (code.length < 4) return Alert.alert('Enter code', 'Please enter the 6-digit code');
@@ -158,9 +143,7 @@ const SignInScreen: React.FC<Props> = ({onAuthSuccess}) => {
 
       {info ? <Text style={styles.info}>{info}</Text> : null}
 
-      <TouchableOpacity style={[styles.button, styles.checkButton]} onPress={checkSession} disabled={loading}>
-        <Text style={styles.buttonText}>I clicked the link — Continue</Text>
-      </TouchableOpacity>
+      {/* Legacy manual link-check flow removed — OTP flow handles verification now */}
     </View>
   );
 };

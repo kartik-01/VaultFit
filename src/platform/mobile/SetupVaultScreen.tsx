@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import HealthCollector from '../../../modules/health-collector';
 import {KeyManager} from '../../services/crypto/KeyManager';
+import {File, Paths} from 'expo-file-system';
 
 interface SetupVaultScreenProps {
   onVaultCreated: (sessionKey: string) => void;
@@ -68,8 +69,13 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
 
   const createVault = async (finalPin: string) => {
     setStep('creating');
+    const start = Date.now();
     try {
       const sessionKey = await KeyManager.initializeVault(mnemonic, finalPin);
+      const elapsed = Date.now() - start;
+      if (elapsed < 3000) {
+        await new Promise(resolve => setTimeout(resolve, 3000 - elapsed));
+      }
       onVaultCreated(sessionKey);
     } catch (error) {
       Alert.alert('Error', 'Failed to create vault. Please try again.');
@@ -135,6 +141,93 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
         you forget your PIN.
       </Text>
 
+      <View style={styles.actionsRowCentered}>
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={async () => {
+            try {
+              // Try Expo Clipboard first
+              try {
+                const ExpoClipboard = require('expo-clipboard');
+                if (ExpoClipboard && typeof ExpoClipboard.setStringAsync === 'function') {
+                  await ExpoClipboard.setStringAsync(mnemonic);
+                  Alert.alert('Copied', 'Recovery phrase copied to clipboard');
+                  return;
+                }
+              } catch (e) {
+                // ignore
+              }
+
+              // Fallback to React Native Clipboard
+              try {
+                const RN = require('react-native');
+                if (RN && RN.Clipboard && typeof RN.Clipboard.setString === 'function') {
+                  RN.Clipboard.setString(mnemonic);
+                  Alert.alert('Copied', 'Recovery phrase copied to clipboard, please paste it somewhere safe.');
+                  return;
+                }
+              } catch (e) {
+                // ignore
+              }
+
+              Alert.alert('Copy failed', 'Clipboard API not available');
+            } catch (err: any) {
+              Alert.alert('Copy failed', String(err));
+            }
+          }}>
+          <Text style={styles.smallButtonText}>Copy</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.orText}>OR</Text>
+
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={async () => {
+            try {
+              const filename = `vaultfit-recovery-${Date.now()}.txt`;
+              const outFile = new File(Paths.document, filename);
+              await outFile.create({overwrite: true});
+              await outFile.write(mnemonic);
+              const outPath = outFile.uri ?? `${Paths.document}/${filename}`;
+
+              try {
+                let SharingModule: any = null;
+                try {
+                  SharingModule = require('expo-sharing');
+                } catch (reqErr) {
+                  SharingModule = null;
+                }
+
+                if (SharingModule && typeof SharingModule.isAvailableAsync === 'function') {
+                  const available = await SharingModule.isAvailableAsync();
+                  if (available && typeof SharingModule.shareAsync === 'function') {
+                    await SharingModule.shareAsync(outPath);
+                    return;
+                  }
+                }
+
+                // Fallback to React Native Share
+                try {
+                  const {Share} = require('react-native');
+                  await Share.share({url: outPath});
+                  return;
+                } catch (rnShareErr) {
+                  // final fallback: show path
+                }
+
+                Alert.alert('Saved', outPath);
+              } catch (shareErr) {
+                Alert.alert('Saved', outPath);
+              }
+            } catch (err: any) {
+              console.error('[SetupVault] export failed', err);
+              Alert.alert('Export failed', String(err));
+            }
+          }}>
+          <Text style={styles.smallButtonText}>Download</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.mnemonicContainer}>
         {mnemonic.split(' ').map((word, index) => (
           <View key={index} style={styles.wordBadge}>
@@ -145,7 +238,7 @@ const SetupVaultScreen: React.FC<SetupVaultScreenProps> = ({
       </View>
 
       <TouchableOpacity
-        style={styles.button}
+        style={[styles.button, {marginTop: 12}]}
         onPress={() => setStep('pin')}>
         <Text style={styles.buttonText}>I Have Saved It</Text>
       </TouchableOpacity>
@@ -221,13 +314,13 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#f8fafc',
-    marginBottom: 16,
+    marginBottom: 12,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: '#94a3b8',
-    marginBottom: 32,
+    marginBottom: 20,
     textAlign: 'center',
     lineHeight: 24,
   },
@@ -275,6 +368,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 12,
+    marginTop: 18,
     marginBottom: 32,
   },
   wordBadge: {
@@ -312,6 +406,39 @@ const styles = StyleSheet.create({
     letterSpacing: 8,
     borderWidth: 1,
     borderColor: '#334155',
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginTop: 12,
+  },
+  smallButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 18,
+  },
+  smallButtonText: {
+    color: '#38bdf8',
+    fontWeight: '700',
+  },
+  actionsRowCentered: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  orText: {
+    color: '#94a3b8',
+    marginHorizontal: 8,
+    fontWeight: '700',
   },
 });
 
